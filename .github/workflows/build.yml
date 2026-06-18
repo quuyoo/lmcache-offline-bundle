@@ -2,6 +2,8 @@ name: Build llama.cpp CPU (for 128GB RPC workers)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
   build:
