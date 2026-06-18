@@ -6,9 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: debian:buster
-      options: --user root
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -16,8 +13,8 @@ jobs:
 
       - name: Install build deps
         run: |
-          apt-get update
-          apt-get install -y cmake build-essential git wget ca-certificates python3-dev python3-pip
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential git wget ca-certificates python3-dev python3-pip
 
       - name: Build LMCache Daemon
         run: |
@@ -38,10 +35,9 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/artifact/bin
           cp build/bin/llama-server $GITHUB_WORKSPACE/artifact/bin/
 
-      - name: Generate configs & scripts
+      - name: Generate configs
         run: |
-          mkdir -p $GITHUB_WORKSPACE/artifact/{config,systemd,scripts}
-
+          mkdir -p $GITHUB_WORKSPACE/artifact/config
           cat > $GITHUB_WORKSPACE/artifact/config/lmcache-128gb-1.yaml <<'EOF'
 lmcache:
   chunk_size: 512
@@ -56,7 +52,6 @@ lmcache:
     peers: ["134.200.18.7:6500", "134.200.18.8:6500", "134.200.58.99:6500"]
     port: 6500
 EOF
-
           cat > $GITHUB_WORKSPACE/artifact/config/lmcache-128gb-2.yaml <<'EOF'
 lmcache:
   chunk_size: 512
@@ -71,7 +66,6 @@ lmcache:
     peers: ["134.200.18.7:6500", "134.200.18.8:6500", "134.200.58.99:6500"]
     port: 6500
 EOF
-
           cat > $GITHUB_WORKSPACE/artifact/config/lmcache-3090.yaml <<'EOF'
 lmcache:
   chunk_size: 512
@@ -87,6 +81,9 @@ lmcache:
     port: 6500
 EOF
 
+      - name: Generate systemd service
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/artifact/systemd
           cat > $GITHUB_WORKSPACE/artifact/systemd/lmcache.service <<'EOF'
 [Unit]
 Description=LMCache Daemon
@@ -101,47 +98,40 @@ LimitMEMLOCK=infinity
 WantedBy=multi-user.target
 EOF
 
-          cat > $GITHUB_WORKSPACE/artifact/scripts/deploy-128gb.sh <<'DEPLOY128'
+      - name: Generate deploy scripts
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/artifact/scripts
+          cat > $GITHUB_WORKSPACE/artifact/scripts/deploy-128gb.sh <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 NODE_ID="${1:-128gb-1}"
-echo "=== 部署 128GB 节点: $NODE_ID ==="
-
+echo "=== Deploy 128GB node: $NODE_ID ==="
 sudo cp /opt/lmcache-bundle/bin/lmcache_server /usr/local/bin/
 sudo chmod +x /usr/local/bin/lmcache_server
-
 sudo mkdir -p /etc/lmcache /var/lib/lmcache /mnt/lmcache_disk
 sudo chown -R $(whoami):$(whoami) /var/lib/lmcache /mnt/lmcache_disk
-
 case "$NODE_ID" in
   128gb-1) sudo cp /opt/lmcache-bundle/config/lmcache-128gb-1.yaml /etc/lmcache/config.yaml ;;
   128gb-2) sudo cp /opt/lmcache-bundle/config/lmcache-128gb-2.yaml /etc/lmcache/config.yaml ;;
 esac
 sudo cp /opt/lmcache-bundle/systemd/lmcache.service /etc/systemd/system/
-
 sudo systemctl daemon-reload
 sudo systemctl enable --now lmcache
-
-echo "=== $NODE_ID 部署完成 ==="
-echo "状态: systemctl status lmcache"
-DEPLOY128
+echo "=== $NODE_ID done ==="
+SCRIPT
           chmod +x $GITHUB_WORKSPACE/artifact/scripts/deploy-128gb.sh
 
-          cat > $GITHUB_WORKSPACE/artifact/scripts/deploy-3090.sh <<'DEPLOY3090'
+          cat > $GITHUB_WORKSPACE/artifact/scripts/deploy-3090.sh <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "=== 部署 3090: llama-server + LMCache ==="
-
+echo "=== Deploy 3090 ==="
 sudo cp /opt/lmcache-bundle/bin/lmcache_server /usr/local/bin/
 sudo chmod +x /usr/local/bin/lmcache_server
 sudo cp /opt/lmcache-bundle/bin/llama-server /home/cuaibox/zhuhui/llamacpp/build/bin/
 sudo chown cuaibox:cuaibox /home/cuaibox/zhuhui/llamacpp/build/bin/llama-server
-
 sudo mkdir -p /etc/lmcache /var/lib/lmcache /mnt/lmcache_disk
-
 sudo cp /opt/lmcache-bundle/config/lmcache-3090.yaml /etc/lmcache/config.yaml
 sudo cp /opt/lmcache-bundle/systemd/lmcache.service /etc/systemd/system/
-
 cat > /home/cuaibox/zhuhui/llamacpp/llama.cpp/start_server.sh <<'START'
 #!/usr/bin/env bash
 ./build/bin/llama-server \
@@ -157,34 +147,23 @@ cat > /home/cuaibox/zhuhui/llamacpp/llama.cpp/start_server.sh <<'START'
   >> /home/cuaibox/zhuhui/llamacpp/llama.cpp/server.log 2>&1
 START
 chmod +x /home/cuaibox/zhuhui/llamacpp/llama.cpp/start_server.sh
-
 sudo systemctl daemon-reload
 sudo systemctl enable --now lmcache
-
-echo "=== 3090 部署完成 ==="
-echo "启动 llama-server: cd /home/cuaibox/zhuhui/llamacpp/llama.cpp && bash start_server.sh"
-DEPLOY3090
+echo "=== 3090 done ==="
+SCRIPT
           chmod +x $GITHUB_WORKSPACE/artifact/scripts/deploy-3090.sh
 
-          cat > $GITHUB_WORKSPACE/artifact/scripts/verify.sh <<'VERIFY'
+          cat > $GITHUB_WORKSPACE/artifact/scripts/verify.sh <<'SCRIPT'
 #!/usr/bin/env bash
-echo "=== 集群验证 ==="
-echo "--- 128GB #1 (134.200.18.7) ---"
+echo "=== Cluster Verify ==="
+echo "--- 128GB #1 ---"
 curl -sf http://134.200.18.7:6500/health && echo " OK" || echo " FAIL"
-echo "--- 128GB #2 (134.200.18.8) ---"
+echo "--- 128GB #2 ---"
 curl -sf http://134.200.18.8:6500/health && echo " OK" || echo " FAIL"
-echo "--- 3090 llama-server ---"
+echo "--- 3090 ---"
 curl -sf http://134.200.58.99:18686/v1/models && echo "" || echo " FAIL"
-echo "--- 测试并发 ---"
-for i in 1 2 3 4; do
-  curl -s -X POST http://134.200.58.99:18686/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -d "{\"model\":\"My-QwenGlm-35B\",\"messages\":[{\"role\":\"user\",\"content\":\"测试用户$i\"}],\"max_tokens\":20}" &
-done
-wait
-echo ""
-echo "=== 验证完成 ==="
-VERIFY
+echo "=== Done ==="
+SCRIPT
           chmod +x $GITHUB_WORKSPACE/artifact/scripts/verify.sh
 
       - name: Package
