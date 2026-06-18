@@ -1,4 +1,4 @@
-name: Build LMCache Bundle
+name: Build llama.cpp CPU (for 128GB RPC workers)
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: debian:bullseye
+      image: debian:buster
     steps:
       - uses: actions/checkout@v4
 
@@ -15,61 +15,34 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential cmake git python3 python3-pip python3-venv \
-            curl wget ca-certificates pkg-config
+            build-essential cmake curl wget ca-certificates pkg-config
 
-      - name: Build llama.cpp with LMCache support
+      - name: Build CPU-only llama-server
         run: |
           cd /tmp
-          git clone --depth=1 https://github.com/ggml-org/llama.cpp.git
+          curl -sL https://github.com/ggml-org/llama.cpp/archive/refs/heads/master.tar.gz -o llama-cpp.tar.gz
+          tar xzf llama-cpp.tar.gz
+          mv llama.cpp-master llama.cpp
           cd llama.cpp
           mkdir build && cd build
-          cmake -DLMCACHE=ON -DCMAKE_BUILD_TYPE=Release ..
+          cmake -DCMAKE_BUILD_TYPE=Release ..
           cmake --build . --config Release -j$(nproc)
-          mkdir -p /opt/lmcache-bundle/llama-cpp-server
-          cp bin/llama-server /opt/lmcache-bundle/llama-cpp-server/
-          cp bin/llama-cli /opt/lmcache-bundle/llama-cpp-server/
-          cp -r ../models/ /opt/lmcache-bundle/llama-cpp-server/ 2>/dev/null || true
-          echo "llama.cpp build done"
-
-      - name: Build LMCache C++ daemon
-        run: |
-          cd /tmp
-          git clone --depth=1 https://github.com/LLM-Engineering/lmcache.git
-          cd lmcache
-          pip3 install --break-system-packages -e . 2>/dev/null || pip3 install -e .
-          mkdir build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/lmcache-bundle ..
-          cmake --build . --config Release -j$(nproc)
-          cmake --install .
-          echo "LMCache build done"
-
-      - name: Install LMCache Python wheel
-        run: |
-          cd /tmp/lmcache
-          pip3 wheel --no-deps -w /opt/lmcache-bundle/whl/ . 2>/dev/null || \
-          pip3 wheel --no-deps --break-system-packages -w /opt/lmcache-bundle/whl/ .
-          echo "Python wheel built"
+          mkdir -p /opt/bundle/llama-cpp-server
+          cp bin/llama-server /opt/bundle/llama-cpp-server/
+          echo "=== Build done ==="
+          ls -la /opt/bundle/llama-cpp-server/
 
       - name: Package bundle
         run: |
-          # Clean up build artifacts
-          rm -rf /tmp/llama.cpp /tmp/lmcache
-
-          # Create version file
-          date +"%Y-%m-%d %H:%M:%S" > /opt/lmcache-bundle/VERSION
-
-          # Create tar.gz
+          rm -rf /tmp/llama.cpp /tmp/llama-cpp.tar.gz
+          date +"%Y-%m-%d %H:%M:%S" > /opt/bundle/VERSION
           cd /opt
-          tar czf /tmp/lmcache-bundle.tar.gz lmcache-bundle/
-
-          # Verify
-          ls -lh /tmp/lmcache-bundle.tar.gz
-          echo "Bundle ready"
+          tar czf /tmp/llama-rpc-worker.tar.gz bundle/
+          ls -lh /tmp/llama-rpc-worker.tar.gz
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lmcache-bundle
-          path: /tmp/lmcache-bundle.tar.gz
+          name: llama-rpc-worker
+          path: /tmp/llama-rpc-worker.tar.gz
           retention-days: 30

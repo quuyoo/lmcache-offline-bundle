@@ -1,52 +1,44 @@
 #!/bin/bash
-# deploy-3090.sh - Deploy llama-server with LMCache to RTX 3090
+# deploy-3090.sh - Update 3090 server config to use RPC workers
 set -e
 
-DEPLOY_DIR="/opt/lmcache-bundle"
-LMCACHE_HOST="134.200.18.7:6500,134.200.18.8:6500"
+RPC_WORKERS="134.200.18.7:6500,134.200.18.8:6500"
 
-echo "=== Deploying llama-server to RTX 3090 ==="
+echo "=== Updating 3090 llama-server with RPC workers ==="
+echo "RPC workers: $RPC_WORKERS"
 
-# Check bundle
-if [ ! -f "$DEPLOY_DIR/lmcache-bundle.tar.gz" ]; then
-    echo "Bundle not found at $DEPLOY_DIR. Download from GitHub Actions first."
+# Detect existing llama-server location
+if command -v llama-server &> /dev/null; then
+    BINARY=$(which llama-server)
+elif [ -f "/home/cuaibox/zhuhui/llamacpp/llama.cpp/build/bin/llama-server" ]; then
+    BINARY="/home/cuaibox/zhuhui/llamacpp/llama.cpp/build/bin/llama-server"
+else
+    echo "llama-server not found. Locate it first."
     exit 1
 fi
 
-# Extract if needed
-if [ ! -d "$DEPLOY_DIR/llama-cpp-server" ]; then
-    cd /
-    tar xzf "$DEPLOY_DIR/lmcache-bundle.tar.gz"
-fi
+echo "Found: $BINARY"
 
-# Create start script with LMCache RPC
-cat > $DEPLOY_DIR/start-server.sh << EOF
+cat > /opt/start-server-rpc.sh << EOF
 #!/bin/bash
-# Start llama-server with LMCache distributed RPC
-# Model path - adjust as needed
-MODEL_PATH="/home/cuaibox/zhuhui/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf"
+# llama-server with RPC worker offloading
+MODEL="/home/cuaibox/zhuhui/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf"
 
-# If model not found, try common locations
-if [ ! -f "\$MODEL_PATH" ]; then
-    for p in \\
-        "/home/cuaibox/zhuhui/llamacpp/llama.cpp/models/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf" \\
-        "/opt/models/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf" \\
-        "./models/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf"; do
-        if [ -f "\$p" ]; then
-            MODEL_PATH="\$p"
-            break
-        fi
-    done
-fi
+# Fallback paths
+for p in \\
+    "/home/cuaibox/zhuhui/llamacpp/llama.cpp/models/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf" \\
+    "/opt/models/Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf"; do
+    if [ -f "\$p" ]; then
+        MODEL="\$p"
+        break
+    fi
+done
 
-echo "Using model: \$MODEL_PATH"
-echo "LMCache RPC backends: $LMCACHE_HOST"
+echo "Model: \$MODEL"
+echo "RPC: $RPC_WORKERS"
 
-cd $DEPLOY_DIR/llama-cpp-server
-
-# Start llama-server with LMCache RPC
-./llama-server \\
-    --model "\$MODEL_PATH" \\
+$BINARY \\
+    --model "\$MODEL" \\
     --host 0.0.0.0 \\
     --port 8080 \\
     --ctx-size 262144 \\
@@ -54,42 +46,14 @@ cd $DEPLOY_DIR/llama-cpp-server
     --n-gpu-layers 41 \\
     --cache-type-k q8_0 \\
     --cache-type-v q8_0 \\
-    --rpc "$LMCACHE_HOST"
+    --rpc "$RPC_WORKERS"
 EOF
-chmod +x $DEPLOY_DIR/start-server.sh
+chmod +x /opt/start-server-rpc.sh
 
-# Create systemd service
-cat > /etc/systemd/system/llama-lmcache.service << EOF
-[Unit]
-Description=Llama Server with LMCache
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=$DEPLOY_DIR/start-server.sh
-Restart=always
-RestartSec=10
-User=root
-WorkingDirectory=$DEPLOY_DIR/llama-cpp-server
-Environment="LD_LIBRARY_PATH=$DEPLOY_DIR/llama-cpp-server:$LD_LIBRARY_PATH"
-Environment="CUDA_VISIBLE_DEVICES=0"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Create stop script
-cat > $DEPLOY_DIR/stop-server.sh << 'EOF'
-#!/bin/bash
-echo "Stopping llama-lmcache service..."
-systemctl stop llama-lmcache
-echo "Service stopped."
-EOF
-chmod +x $DEPLOY_DIR/stop-server.sh
-
-systemctl daemon-reload
-systemctl enable llama-lmcache
-
-echo "=== Deployment complete ==="
-echo "Start server: systemctl start llama-lmcache"
-echo "Or manually: $DEPLOY_DIR/start-server.sh"
+echo "=== Created /opt/start-server-rpc.sh ==="
+echo "Run it after starting RPC workers on 128GB machines"
+echo ""
+echo "Start order:"
+echo "  1. 128GB-1: systemctl start llama-rpc-worker"
+echo "  2. 128GB-2: systemctl start llama-rpc-worker"
+echo "  3. 3090:    bash /opt/start-server-rpc.sh"
