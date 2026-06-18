@@ -11,9 +11,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fix apt sources (buster EOL)
+        run: |
+          sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
+          sed -i 's/security.debian.org/archive.debian.org/g' /etc/apt/sources.list
+          sed -i 's/buster\/updates/buster/g' /etc/apt/sources.list
+          apt-get update
+
       - name: Install build dependencies
         run: |
-          apt-get update
           apt-get install -y --no-install-recommends \
             build-essential cmake curl wget ca-certificates pkg-config
 
@@ -30,7 +36,6 @@ jobs:
           mkdir -p /opt/bundle/llama-cpp-server
           cp bin/llama-server /opt/bundle/llama-cpp-server/
           echo "=== Build done ==="
-          ls -la /opt/bundle/llama-cpp-server/
 
       - name: Package bundle
         run: |
