@@ -9,13 +9,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: alpine:3.20
+      image: debian:bullseye
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
-          apk add --no-cache build-base cmake curl wget ca-certificates linux-headers
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake curl wget ca-certificates pkg-config
 
       - name: Build CPU-only llama-server
         run: |
@@ -29,6 +31,7 @@ jobs:
           cmake --build . --config Release -j$(nproc)
           mkdir -p /opt/bundle/llama-cpp-server
           cp bin/llama-server /opt/bundle/llama-cpp-server/
+          cp bin/llama-cli /opt/bundle/llama-cpp-server/
           echo "=== Build done ==="
           file /opt/bundle/llama-cpp-server/llama-server
 
