@@ -6,8 +6,70 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: debian:bullseye
     steps:
       - uses: actions/checkout@v4
 
-      - name: Test
-        run: echo "Workflow triggered successfully"
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git python3 python3-pip python3-venv \
+            curl wget ca-certificates pkg-config
+
+      - name: Build llama.cpp with LMCache support
+        run: |
+          cd /tmp
+          git clone --depth=1 https://github.com/ggml-org/llama.cpp.git
+          cd llama.cpp
+          mkdir build && cd build
+          cmake -DLMCACHE=ON -DCMAKE_BUILD_TYPE=Release ..
+          cmake --build . --config Release -j$(nproc)
+          mkdir -p /opt/lmcache-bundle/llama-cpp-server
+          cp bin/llama-server /opt/lmcache-bundle/llama-cpp-server/
+          cp bin/llama-cli /opt/lmcache-bundle/llama-cpp-server/
+          cp -r ../models/ /opt/lmcache-bundle/llama-cpp-server/ 2>/dev/null || true
+          echo "llama.cpp build done"
+
+      - name: Build LMCache C++ daemon
+        run: |
+          cd /tmp
+          git clone --depth=1 https://github.com/LLM-Engineering/lmcache.git
+          cd lmcache
+          pip3 install --break-system-packages -e . 2>/dev/null || pip3 install -e .
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/lmcache-bundle ..
+          cmake --build . --config Release -j$(nproc)
+          cmake --install .
+          echo "LMCache build done"
+
+      - name: Install LMCache Python wheel
+        run: |
+          cd /tmp/lmcache
+          pip3 wheel --no-deps -w /opt/lmcache-bundle/whl/ . 2>/dev/null || \
+          pip3 wheel --no-deps --break-system-packages -w /opt/lmcache-bundle/whl/ .
+          echo "Python wheel built"
+
+      - name: Package bundle
+        run: |
+          # Clean up build artifacts
+          rm -rf /tmp/llama.cpp /tmp/lmcache
+
+          # Create version file
+          date +"%Y-%m-%d %H:%M:%S" > /opt/lmcache-bundle/VERSION
+
+          # Create tar.gz
+          cd /opt
+          tar czf /tmp/lmcache-bundle.tar.gz lmcache-bundle/
+
+          # Verify
+          ls -lh /tmp/lmcache-bundle.tar.gz
+          echo "Bundle ready"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lmcache-bundle
+          path: /tmp/lmcache-bundle.tar.gz
+          retention-days: 30
